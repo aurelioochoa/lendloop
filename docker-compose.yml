@@ -1,0 +1,45 @@
+# n8n for LendLoop. Start with:  docker compose up -d   (UI at http://localhost:5678)
+#
+# On first start the three workflows in ./n8n/workflows are imported and published
+# (n8n 2.x only runs an error workflow that is published). Later restarts keep your edits; delete the
+# n8n_data volume (docker compose down -v) to re-import from the JSON files.
+#
+# Secrets come from .env.n8n (see .env.n8n.example). They are never stored in the workflow JSON.
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.49.6
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    extra_hosts:
+      # Lets the container reach a Convex backend running on your machine.
+      - "host.docker.internal:host-gateway"
+    # N8N_WEBHOOK_SECRET, LENDLOOP_API_SECRET, LENDLOOP_CONVEX_SITE_URL, GENERIC_TIMEZONE
+    env_file: .env.n8n
+    environment:
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # The Code nodes sign and verify requests with Node's crypto module and read the
+      # secrets from the environment (.env.n8n).
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      # Errors from workflows reach the Error workflow; keep a week of executions.
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /home/node/.n8n/.lendloop-imported ]; then
+          n8n import:workflow --separate --input=/workflows &&
+          n8n publish:workflow --id=LLrequestNotify1 &&
+          n8n publish:workflow --id=LLoverdueRemind1 &&
+          n8n publish:workflow --id=LLerrorHandler01 &&
+          touch /home/node/.n8n/.lendloop-imported
+        fi
+        exec n8n start
+
+volumes:
+  n8n_data:

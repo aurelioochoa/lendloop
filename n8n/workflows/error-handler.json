@@ -1,0 +1,88 @@
+{
+  "id": "LLerrorHandler01",
+  "name": "LendLoop · Error handler",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "id": "eh-trigger",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "eh-sign",
+      "name": "Sign error report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// HMAC-SHA256 over \"<timestamp>.<METHOD>.<path>.<body>\", the same scheme Convex verifies.\n// The secret comes from the environment (LENDLOOP_API_SECRET); it is never stored in this workflow.\nconst crypto = require('crypto');\nfunction signedRequest(method, path, body) {\n  const base = $env.LENDLOOP_CONVEX_SITE_URL;\n  const secret = $env.LENDLOOP_API_SECRET;\n  if (!base || !secret) throw new Error('LENDLOOP_CONVEX_SITE_URL and LENDLOOP_API_SECRET must be set');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const signature = 'sha256=' + crypto.createHmac('sha256', secret)\n    .update(timestamp + '.' + method + '.' + path + '.' + body).digest('hex');\n  return {\n    url: base.replace(/\\/$/, '') + path,\n    body,\n    headers: { 'X-LendLoop-Timestamp': timestamp, 'X-LendLoop-Signature': signature },\n  };\n}\n\n// Error Trigger output: { execution: { id, lastNodeExecuted, error }, workflow: { name } } for run errors,\n// or { trigger: { error }, workflow } when the trigger itself failed.\nconst e = $input.first().json;\nconst execution = e.execution || {};\nconst error = execution.error || (e.trigger && e.trigger.error) || {};\nconst body = JSON.stringify({\n  workflow: (e.workflow && e.workflow.name) || 'unknown workflow',\n  node: execution.lastNodeExecuted || undefined,\n  message: String(error.message || 'unknown error').slice(0, 500),\n  executionId: String(execution.id || 'trigger-' + Date.now()),\n});\n\nreturn [{ json: signedRequest('POST', '/n8n/automation-error', body) }];"
+      }
+    },
+    {
+      "id": "eh-report",
+      "name": "Report to Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "options": {
+          "timeout": 10000
+        },
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Sign error report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign error report": {
+      "main": [
+        [
+          {
+            "node": "Report to Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
